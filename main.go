@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"os"
+	"text/template"
 	"time"
 )
 
@@ -19,22 +21,19 @@ func pbpHandler(w http.ResponseWriter, r *http.Request) {
 	requestedGameCode := r.URL.Path[len("/pbp/"):]
 	log.Printf("requested %s pbp\n", requestedGameCode)
 
-	// ideally -- game from gamecode?
-	// PbpFromGameCode ?
-
-	games, err := getGames()
+	pbpGame, err := getPlayByPlayFromGameCode(requestedGameCode)
 
 	if err != nil {
-		log.Printf("error retrieving games: %s\n", err)
+		log.Printf("error retrieving game: %s\n", err)
 		w.WriteHeader(http.StatusInternalServerError)
 		fmt.Fprintln(w, `{"error":"server error occurred"}`)
 		return
 	}
 
 	enc := json.NewEncoder(w)
-	err = enc.Encode(&games)
+	err = enc.Encode(&pbpGame)
 	if err != nil {
-		log.Printf("error encoding games: %s\n", err)
+		log.Printf("error encoding game: %s\n", err)
 		w.WriteHeader(http.StatusInternalServerError)
 		fmt.Fprintln(w, `{"error":"server error occurred"}`)
 		return
@@ -70,18 +69,26 @@ func getPlayByPlayFromGameCode(gameCode string) (PlayByPlayGame, error) {
 	return pbpGame, nil
 }
 
-func getPlayByPlayFromGameId(g Game) (PlayByPlayGame, error) {
-	todayPbpUrl, err := TodayPbpURL()
+func getPlayByPlayFromGame(g Game) (PlayByPlayGame, error) {
+	// HACK: today url is "/data/10s/prod/v1/{{gameDate}}/{{gameId}}_pbp_{{periodNum}}.json"
+	// figure out good way to replace in handlebars template
+
+	t := template.New("nba pbp url")
+	t, err := t.Parse("{{.BaseUrl}}/data/10s/prod/v1/{{.GameDate}}/{{.Id}}_pbp_{{.Period.Current}}.json")
 	if err != nil {
-		log.Printf("error retrieving today url: %s\n", err)
-		return PlayByPlayGame{Game: game}, err
+		log.Printf("error parsing template: %s\n", err)
+		return PlayByPlayGame{}, err
 	}
 
-	fmt.Printf("%s\n", todayPbpUrl)
+	t.Execute(os.Stdout, struct {
+		BaseUrl string
+		Game
+	}{
+		NBABaseURL,
+		g,
+	})
 
-	return PlayByPlayGame{Game: game}, nil
-
-	// how to parse handlebars in linkrel?
+	return PlayByPlayGame{Game: g}, nil
 
 }
 
@@ -93,17 +100,22 @@ const NBABaseURL = "http://data.nba.net"
 const NBATodayRoute = "/10s/prod/v1/today.json"
 
 func TodayPbpURL() (string, error) {
+	todayResp, err := NBAToday()
+	if err != nil {
+		log.Printf("error getting today response: %s\n", err)
+		return "", err
+	}
 	NBATodayPbpURL := fmt.Sprintf("%s%s", NBABaseURL, todayResp.Links["pbp"])
 	return NBATodayPbpURL, nil
 }
 
-func NBAToday() (NBATodayResponse, err) {
+func NBAToday() (NBATodayResponse, error) {
 	NBATodayURL := fmt.Sprintf("%s%s", NBABaseURL, NBATodayRoute)
 
 	resp, err := http.Get(NBATodayURL)
 	if err != nil {
 		log.Printf("error retrieving today url: %s\n", err)
-		return "", err
+		return NBATodayResponse{}, err
 	}
 	defer resp.Body.Close()
 
@@ -114,7 +126,7 @@ func NBAToday() (NBATodayResponse, err) {
 		err := dec.Decode(&todayResp)
 		if err != nil {
 			log.Printf("error decoding response: %s\n", err)
-			return "", err
+			return NBATodayResponse{}, err
 		}
 	}
 	return todayResp, nil
@@ -145,13 +157,13 @@ func getGames() (Games, error) {
 	return games, nil
 }
 
-func (gs Games) FindByGameCode(gameCode) (Game, error) {
+func (gs Games) FindByGameCode(gameCode string) (Game, error) {
 	for _, game := range gs.Games {
 		if game.GameCode() == gameCode {
 			return game, nil
 		}
 	}
-	return "", errors.New(fmt.Sprintf("Game %s not scheduled for today!", gameCode))
+	return Game{}, errors.New(fmt.Sprintf("Game %s not scheduled for today!", gameCode))
 }
 
 type Game struct {
@@ -163,7 +175,17 @@ type Game struct {
 }
 
 func (g Game) GameCode() string {
-	fmt.Sprintf("%s%s", g.VisitingTeam.TriCode, g.HomeTeam.TriCode)
+	return fmt.Sprintf("%s%s", g.VisitingTeam.TriCode, g.HomeTeam.TriCode)
+}
+
+// GameDate returns the start date of game (YYYYMMDD format) in US/Eastern tz
+// TODO: make sure output is in eastern
+func (g Game) GameDate() string {
+	easternTime, err := time.LoadLocation("America/New_York")
+	if err != nil {
+		os.Exit(1)
+	}
+	return g.StartTime.In(easternTime).Format("20060102")
 }
 
 type Team struct {
