@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -42,8 +43,22 @@ func pbpHandler(w http.ResponseWriter, r *http.Request) {
 
 type PlayByPlayGame struct {
 	Game
-	Foo string
-	// Plays []Play
+	Plays []Play
+}
+
+type Play struct {
+	Clock            string        `json:"clock"`
+	Description      string        `json:"description"`
+	PersonId         string        `json:"personId"`
+	TeamId           string        `json:"teamId"`
+	VistingTeamScore string        `json:"vTeamScore"`
+	HomeTeamScore    string        `json:"hTeamScore"`
+	IsScoreChange    bool          `json:"isScoreChange"`
+	Formatted        FormattedPlay `json:"formatted"`
+}
+
+type FormattedPlay struct {
+	Description string `json:"description"`
 }
 
 func getPlayByPlayFromGameCode(gameCode string) (PlayByPlayGame, error) {
@@ -63,24 +78,55 @@ func getPlayByPlayFromGameCode(gameCode string) (PlayByPlayGame, error) {
 	pbpGame, err := getPlayByPlayFromGame(game)
 	if err != nil {
 		log.Printf("error retrieving pbp: %s\n", err)
-		return PlayByPlayGame{}, err
+		return PlayByPlayGame{Game: game}, err
 	}
 
 	return pbpGame, nil
 }
 
 func getPlayByPlayFromGame(g Game) (PlayByPlayGame, error) {
-	// HACK: today url is "/data/10s/prod/v1/{{gameDate}}/{{gameId}}_pbp_{{periodNum}}.json"
-	// figure out good way to replace in handlebars template
-
-	t := template.New("nba pbp url")
-	t, err := t.Parse("{{.BaseUrl}}/data/10s/prod/v1/{{.GameDate}}/{{.Id}}_pbp_{{.Period.Current}}.json")
+	pbpUrl, err := getPlayByPlayUrlFromGame(g)
 	if err != nil {
-		log.Printf("error parsing template: %s\n", err)
+		log.Printf("error retrieving pbp url: %s\n", err)
 		return PlayByPlayGame{}, err
 	}
 
-	t.Execute(os.Stdout, struct {
+	resp, err := http.Get(pbpUrl)
+	if err != nil {
+		log.Printf("error retrieving pbp: %s\n", err)
+		return PlayByPlayGame{Game: g}, err
+	}
+	defer resp.Body.Close()
+
+	dec := json.NewDecoder(resp.Body)
+
+	var pbpGame PlayByPlayGame
+	for dec.More() {
+		err := dec.Decode(&pbpGame)
+		if err != nil {
+			log.Printf("error retrieving pbp: %s\n", err)
+			return PlayByPlayGame{Game: g}, err
+		}
+	}
+
+	return pbpGame, nil
+}
+
+func getPlayByPlayUrlFromGame(g Game) (string, error) {
+	// HACK: today url is "/data/10s/prod/v1/{{gameDate}}/{{gameId}}_pbp_{{periodNum}}.json"
+	// retrive TodayURL, grap links["pbp"], then
+	// figure out good way to replace in handlebars template
+
+	t := template.New("nba pbp template")
+	t, err := t.Parse("{{.BaseUrl}}/data/10s/prod/v1/{{.GameDate}}/{{.Id}}_pbp_{{.Period.Current}}.json")
+	if err != nil {
+		log.Printf("error parsing template: %s\n", err)
+		return "", err
+	}
+
+	var pbpUrlBuf bytes.Buffer
+
+	t.Execute(&pbpUrlBuf, struct {
 		BaseUrl string
 		Game
 	}{
@@ -88,8 +134,7 @@ func getPlayByPlayFromGame(g Game) (PlayByPlayGame, error) {
 		g,
 	})
 
-	return PlayByPlayGame{Game: g}, nil
-
+	return pbpUrlBuf.String(), nil
 }
 
 type NBATodayResponse struct {
