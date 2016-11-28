@@ -91,6 +91,8 @@ func getPlayByPlayFromGame(g Game) (PlayByPlayGame, error) {
 		return PlayByPlayGame{}, err
 	}
 
+	fmt.Println("pbp url:", pbpUrl)
+
 	resp, err := http.Get(pbpUrl)
 	if err != nil {
 		log.Printf("error retrieving pbp: %s\n", err)
@@ -118,7 +120,7 @@ func getPlayByPlayUrlFromGame(g Game) (string, error) {
 	// figure out good way to replace in handlebars template
 
 	t := template.New("nba pbp template")
-	t, err := t.Parse("{{.BaseUrl}}/data/10s/prod/v1/{{.GameDate}}/{{.Id}}_pbp_{{.Period.Current}}.json")
+	t, err := t.Parse("{{.BaseUrl}}/data/10s/prod/v1/{{.GameDate}}/{{.Id}}_pbp_{{.Period.Current}}.json") // is adaptive to current game period
 	if err != nil {
 		log.Printf("error parsing template: %s\n", err)
 		return "", err
